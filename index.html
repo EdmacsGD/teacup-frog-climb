@@ -6975,7 +6975,7 @@ const editor = {
 /* ==========================================================================
    18c. ACCOUNTS AND LEADERBOARD (Supabase)
    Fill in the two values below from your Supabase project:
-   Project Settings -> API: "Project URL" and the "anon public" key.
+   Project Settings -> API: "Project URL" and the "publishable" key.
    The anon key is meant to be public: what it can do is limited by the
    rules in supabase-setup.sql. Never put the "service_role" key here.
    With the values empty the game works exactly as before, just offline.
@@ -6984,7 +6984,7 @@ const editor = {
    ========================================================================== */
 const ONLINE = {
   SUPABASE_URL: "",          // like "https://abcdefghijklm.supabase.co"
-  SUPABASE_ANON_KEY: "",     // the long "anon public" key
+  SUPABASE_ANON_KEY: "sb_publishable_C4wohiEQ6JqyQuWUNRRETQ_mxKyBS-b",   // the "publishable" key (or the older "anon public" key)
   // Times only count on the same version of the main map. Change this when the
   // map changes, and the board starts fresh (old times stay in the database).
   MAP_ID: "main-v2",
@@ -7014,7 +7014,9 @@ const online = {
   async req(path, opts = {}) {
     const url = ONLINE.SUPABASE_URL.replace(/\/+$/, "") + path;
     const headers = { apikey: ONLINE.SUPABASE_ANON_KEY, "Content-Type": "application/json" };
-    headers.Authorization = "Bearer " + (opts.token || ONLINE.SUPABASE_ANON_KEY);
+    // Only a player's login goes in Authorization. The project key goes in apikey alone:
+    // the new "sb_publishable_" keys are not JWTs and Supabase rejects them as a Bearer token.
+    if (opts.token) headers.Authorization = "Bearer " + opts.token;
     if (opts.prefer) headers.Prefer = opts.prefer;
     const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
     const timer = ctl ? setTimeout(() => ctl.abort(), 10000) : 0;
