@@ -554,6 +554,7 @@
     <button class="ed-btn" id="ed-redo" title="Ctrl+Y">Redo</button>
     <button class="ed-btn" id="ed-check">Check</button>
     <button class="ed-btn" id="ed-export">Export</button>
+    <button class="ed-btn dev" id="ed-publish" hidden>Publish</button>
     <button class="ed-btn primary" id="ed-play">Play</button>
     <button class="ed-btn" id="ed-close">Close</button>
   </div>
@@ -1238,11 +1239,11 @@ function normalizeMap(m) {
     if (!d || typeof d !== "object") continue;
     const s = { type: d.type, style: STYLES.includes(d.style) ? d.style : "rock" };
     if (d.type === "rect") {
-      Object.assign(s, { x: num(d.x, 0), y: num(d.y, 0), w: num(d.w, 0), h: num(d.h, 0), a: num(d.a, 0) });
-      if (s.w < 4 || s.h < 4) continue;
+      Object.assign(s, { x: num(d.x, 0), y: num(d.y, 0), w: Math.abs(num(d.w, 0)), h: Math.abs(num(d.h, 0)), a: num(d.a, 0) });   // a negative size is the same block
+      if (s.w < (d.solid === false ? 1 : 4) || s.h < (d.solid === false ? 1 : 4)) continue;   // thin lines are fine as decoration
     } else if (d.type === "circle") {
       Object.assign(s, { x: num(d.x, 0), y: num(d.y, 0), r: num(d.r, 0) });
-      if (s.r < 3) continue;
+      if (s.r < (d.solid === false ? 1 : 3)) continue;
     } else if (d.type === "poly" && Array.isArray(d.pts)) {
       s.pts = d.pts.filter(p => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1])).map(p => [p[0], p[1]]);
       if (s.pts.length < 3) continue;
@@ -1297,7 +1298,19 @@ if (CUSTOM) {
   CONFIG.SAVE_KEY += "-custom-" + BOOT.id;
   CONFIG.PROGRESS_KEY += "-custom-" + BOOT.id;
 }
-const MAP = CUSTOM || mainMap();
+// The main map published from the map maker (section 18c) is kept on this device.
+// The game checks for a newer one when it starts and reloads to use it.
+const MAIN_CACHE_KEY = "teacup-main-map";
+function readPublishedMain() {
+  try {
+    const c = JSON.parse(localStorage.getItem(MAIN_CACHE_KEY) || "null");
+    if (!c || !Number.isInteger(c.version)) return null;
+    const m = normalizeMap(c.map);
+    return m ? { version: c.version, board: typeof c.board === "string" ? c.board : null, map: m } : null;
+  } catch (err) { return null; }
+}
+const PUBLISHED = CUSTOM ? null : readPublishedMain();
+const MAP = CUSTOM || (PUBLISHED && PUBLISHED.map) || mainMap();
 const LEVEL = MAP.level, SUMMIT = MAP.summit, START = MAP.start, ZONES = MAP.zones, SUGAR = MAP.sugar,
   CHECKPOINTS = MAP.checkpoints, STARLINES = MAP.starlines, TILTS = MAP.tilts, WINDS = MAP.winds;
 
@@ -3244,19 +3257,31 @@ function aimFromMouse() {
   aimFromPoint(input.mouseX, input.mouseY);
 }
 
+// The mouse is locked (hidden, and it can't leave the window) while you climb,
+// and free in every menu. Browsers only allow locking right after a click or a
+// key press, and not for about a second after Esc unlocked it; if a lock is
+// refused, a click on the game locks it.
 function requestLock() {
   if (input.locked || !canvas.requestPointerLock || app.state !== "playing") return;
+  const refused = () => { if (app.state === "playing" && !input.locked) ui.message("Click to lock the mouse", "", 1.6); };
   try {
     const p = canvas.requestPointerLock();
-    if (p && typeof p.catch === "function") p.catch(() => {});
-  } catch (err) { /* pointer lock not allowed here (some iframes) */ }
+    if (p && typeof p.catch === "function") p.catch(refused);
+  } catch (err) { refused(); }
 }
+// Lock only for a real mouse: not on touch screens
+function usesMouse() {
+  if (input.lastPointer === "touch" || input.lastPointer === "pen") return false;
+  return !window.matchMedia || window.matchMedia("(pointer: fine)").matches;
+}
+// Remember what the player last pressed with, buttons included
+window.addEventListener("pointerdown", e => { input.lastPointer = e.pointerType || "mouse"; }, true);
 
 canvas.addEventListener("pointerdown", e => {
   audio.unlock();
   input.lastPointer = e.pointerType;
   if (app.state !== "playing") return;
-  if (e.pointerType === "mouse") { input.wantLock = true; requestLock(); return; }
+  if (e.pointerType === "mouse") { requestLock(); return; }
   if (touch.id !== null) return;                 // one finger steers
   touch.id = e.pointerId;
   touch.sx = touch.x = e.clientX; touch.sy = touch.y = e.clientY;
@@ -3385,16 +3410,14 @@ const app = {
     lastTime = performance.now();
     accumulator = 0;
     sensors.reset();
+    if (usesMouse()) requestLock();
   },
   pause() {
     if (this.state !== "playing") return;
     this.setState("paused");
     saveRun(); saveProgress();
   },
-  resume() {
-    this.play();
-    if (input.wantLock && input.lastPointer === "mouse") requestLock();
-  },
+  resume() { this.play(); },
 };
 
 
@@ -6143,8 +6166,8 @@ function resetAllProgress() {
    as mainMap() in section 2) and stores each map on this device. Play
    saves the map and reloads the page with it (section 2 boots it), so the
    game itself never has to rebuild its world while running.
-   The main map is never edited here directly: developer mode (Ctrl+Shift+D)
-   makes a copy of it that you can export as a file.
+   The main map is never edited here directly: an admin (section 18c) edits a
+   copy of it and publishes that copy, which every player then loads.
    ========================================================================== */
 const ED_GRID = [0, 5, 10, 25, 50];
 const ED_MATERIALS = ["rock", "wood", "metal", "junk", "trash", "books", "pipe", "tire", "ceramic", "cloud", "cookie", "moon", "crater", "ball", "grass", "sun", "bouncy"];
@@ -6176,7 +6199,7 @@ const EMPTY_MAP = () => ({
 });
 
 const editor = {
-  isOpen: false, map: null, id: null, dev: false, built: new Map(),
+  isOpen: false, map: null, id: null, built: new Map(),
   cam: { x: 0, y: -300, z: 0.5 }, tool: "select", material: "rock", snap: 10,
   sel: [], drag: null, undoStack: [], redoStack: [], dirty: false, saveT: 0, need: true, mouse: { x: 0, y: 0, wx: 0, wy: 0 },
   els: {},
@@ -6236,7 +6259,7 @@ const editor = {
     try {
       localStorage.setItem(MAP_PREFIX + this.id, JSON.stringify(this.map));
       const l = this.list().filter(e => e.id !== this.id);
-      l.unshift({ id: this.id, name: this.map.name, t: Date.now(), dev: this.id === "main-edit" || undefined });
+      l.unshift({ id: this.id, name: this.map.name, t: Date.now() });
       this.writeList(l);
       this.setSaved("Saved");
       return true;
@@ -6595,7 +6618,7 @@ const editor = {
   },
   exportFile() {
     this.saveNow(true);
-    const data = { format: "teacup-frog-map", version: 1, name: this.map.name, dev: this.id === "main-edit", map: this.map };
+    const data = { format: "teacup-frog-map", version: 1, name: this.map.name, map: this.map };
     const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -6615,11 +6638,47 @@ const editor = {
     };
     rd.readAsText(file);
   },
-  editMainMap() {
-    const m = JSON.parse(JSON.stringify(mainMap()));
-    this.newMap(m, "Main map (edit)", "main-edit");
-    this.closeModal();
-    this.toast("This is a copy of the main map. Export it when you are done and send the file.");
+  // A copy of the main map as everyone plays it now (published, or built in)
+  editMainMap(fresh) {
+    if (!fresh && this.list().some(e => e.id === "main-edit") && this.load("main-edit")) {
+      this.closeModal(); this.refreshTop();
+      this.toast("Your copy of the main map. Press Publish when it is ready for everyone.");
+      return;
+    }
+    const src = PUBLISHED ? PUBLISHED.map : mainMap();
+    this.newMap(JSON.parse(JSON.stringify(src)), "Main map", "main-edit");
+    this.closeModal(); this.refreshTop();
+    this.toast("A fresh copy of the main map. Nobody sees your changes until you press Publish.");
+  },
+  async refreshTop() {
+    const pub = this.els.root && document.getElementById("ed-publish");
+    if (!pub) return;
+    pub.hidden = !(this.id === "main-edit" && await online.isAdmin());
+  },
+  // Publish the main-map copy: every player gets it the next time they open the game
+  async publish() {
+    const probs = this.check();
+    const stop = probs.filter(p => /start|flag/.test(p));
+    if (stop.length) { this.toast(stop[0]); return; }
+    this.saveNow(true);
+    const D = this.els.dialog;
+    D.innerHTML = `<h2>Publish the main map?</h2>
+      <p class="ed-hint">Everyone gets this version the next time they open the game. ${probs.length ? "<br><b>Check says:</b> " + esc(probs.join(" ")) : ""}</p>
+      <label class="ed-row ed-chk"><input type="checkbox" data-newboard><span>Start a new leaderboard<small>For a big change: old times no longer fit the map. They stay in the database, just hidden.</small></span></label>
+      <p class="acc-msg" data-pubmsg></p>
+      <div class="ed-btns"><button class="ed-btn primary" data-pubgo>Publish</button><button class="ed-btn" data-closem>Cancel</button></div>`;
+    D.querySelector("[data-closem]").onclick = () => this.closeModal();
+    D.querySelector("[data-pubgo]").onclick = async () => {
+      const msg = D.querySelector("[data-pubmsg]"), go = D.querySelector("[data-pubgo]");
+      go.disabled = true; msg.className = "acc-msg ok"; msg.textContent = "Publishing...";
+      try {
+        const data = JSON.parse(JSON.stringify(this.map)); delete data.name;
+        const r = await online.publishMap(data, D.querySelector("[data-newboard]").checked);
+        msg.textContent = "Published as version " + r.version + ". Players get it when they open or reload the game.";
+        go.hidden = true; D.querySelector("[data-closem]").textContent = "Done";
+      } catch (err) { msg.className = "acc-msg"; msg.textContent = err.message; go.disabled = false; }
+    };
+    this.els.modal.hidden = false;
   },
 
   // ---------- keys ----------
@@ -6628,11 +6687,6 @@ const editor = {
     const tag = (e.target && e.target.tagName) || "";
     if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") { if (e.key === "Escape") e.target.blur(); return true; }
     const k = e.key, ctrl = e.ctrlKey || e.metaKey;
-    if (ctrl && e.shiftKey && (k === "D" || k === "d")) {   // developer mode: edit the main map
-      this.dev = !this.dev; this.toast(this.dev ? "Developer mode on: Maps has 'Edit the main map'." : "Developer mode off.");
-      if (!this.els.modal.hidden) this.openMaps();
-      e.preventDefault(); return true;
-    }
     if (ctrl && (k === "z" || k === "Z")) { e.shiftKey ? this.redo() : this.undo(); e.preventDefault(); return true; }
     if (ctrl && (k === "y" || k === "Y")) { this.redo(); e.preventDefault(); return true; }
     if (ctrl && (k === "d" || k === "D")) { this.duplicateSel(); e.preventDefault(); return true; }
@@ -6667,6 +6721,7 @@ const editor = {
     on("ed-check", () => { const p = this.check(); this.toast(p.length ? p.join(" ") : "Looks good: the start, the flag and the cubes are fine."); });
     on("ed-play", () => this.play());
     on("ed-export", () => this.exportFile());
+    on("ed-publish", () => this.publish());
     on("ed-close", () => this.close());
     E.name.addEventListener("input", () => { this.map.name = E.name.value.slice(0, 60); this.dirty = true; this.saveT = 0.8; });
     E.file.addEventListener("change", () => { if (E.file.files[0]) this.importFile(E.file.files[0]); E.file.value = ""; });
@@ -6712,6 +6767,7 @@ const editor = {
   },
   refreshAll() {
     if (!this.els.root || !this.map) return;
+    this.refreshTop();
     this.els.name.value = this.map.name;
     this.setTool(this.tool);
     this.refreshSide();
@@ -6847,18 +6903,27 @@ const editor = {
   openMaps() {
     this.saveNow();
     const list = this.list();
-    const rows = list.map(e => `<div class="ed-map${e.id === this.id ? " cur" : ""}"><div><b>${esc(e.name || "Untitled")}</b><small>${e.dev ? "copy of the main map, " : ""}${new Date(e.t || 0).toLocaleString()}</small></div>
+    const rows = list.map(e => `<div class="ed-map${e.id === this.id ? " cur" : ""}"><div><b>${esc(e.name || "Untitled")}</b><small>${e.id === "main-edit" ? "your copy of the main map, " : ""}${new Date(e.t || 0).toLocaleString()}</small></div>
       <button class="ed-btn" data-open="${esc(e.id)}">Open</button><button class="ed-btn" data-copy="${esc(e.id)}">Copy</button><button class="ed-btn danger" data-del="${esc(e.id)}">Delete</button></div>`).join("");
     this.els.dialog.innerHTML = `<h2>Your maps</h2><p class="ed-hint">Saved in this browser. Export a map to keep it as a file or share it.</p>
       <div class="ed-maplist">${rows || "<p>No maps yet.</p>"}</div>
       <div class="ed-btns"><button class="ed-btn primary" data-new>New map</button><button class="ed-btn" data-import>Load a map file</button>
-      ${this.dev ? `<button class="ed-btn dev" data-main>Edit the main map</button>` : ""}<button class="ed-btn" data-closem>Close</button></div>`;
+      <span data-adminbtns></span><button class="ed-btn" data-closem>Close</button></div>`;
     const D = this.els.dialog;
     D.querySelector("[data-new]").onclick = () => { this.newMap(EMPTY_MAP(), "My map " + (list.length + 1)); this.closeModal(); };
     D.querySelector("[data-import]").onclick = () => this.els.file.click();
     D.querySelector("[data-closem]").onclick = () => this.closeModal();
-    const dm = D.querySelector("[data-main]");
-    if (dm) dm.onclick = () => this.editMainMap();
+    // only admins see the main map buttons (the database checks again when publishing)
+    online.isAdmin().then(admin => {
+      const slot = D.querySelector("[data-adminbtns]");
+      if (!admin || !slot) return;
+      const has = list.some(e => e.id === "main-edit");
+      slot.innerHTML = `<button class="ed-btn dev" data-main>${has ? "Open your main map copy" : "Edit the main map"}</button>` +
+        (has ? `<button class="ed-btn dev" data-mainfresh>Start over from the live map</button>` : "");
+      slot.querySelector("[data-main]").onclick = () => this.editMainMap(false);
+      const fr = slot.querySelector("[data-mainfresh]");
+      if (fr) fr.onclick = () => { if (window.confirm("Throw away your copy and start from the map everyone plays now?")) this.editMainMap(true); };
+    });
     for (const b of D.querySelectorAll("[data-open]")) b.onclick = () => { this.load(b.dataset.open); this.closeModal(); };
     for (const b of D.querySelectorAll("[data-copy]")) b.onclick = () => { const src = readStoredMap(b.dataset.copy); const e = list.find(x => x.id === b.dataset.copy); if (src) { this.newMap(src, ((e && e.name) || "Map") + " copy"); this.openMaps(); } };
     for (const b of D.querySelectorAll("[data-del]")) b.onclick = () => {
@@ -7002,6 +7067,8 @@ const online = {
   session: null, busy: false,
 
   enabled() { return !!(ONLINE.SUPABASE_URL && ONLINE.SUPABASE_ANON_KEY); },
+  // Which leaderboard counts: the published map says, else the built-in one
+  boardId() { return (PUBLISHED && PUBLISHED.board) || ONLINE.MAP_ID; },
   forThisMap() { return this.enabled() && !CUSTOM; },   // custom maps have no leaderboard
   name() { return this.session ? this.session.username : null; },
   init() {
@@ -7041,6 +7108,7 @@ const online = {
     if (m.includes("database error saving new user")) return "That name is taken. Try another one.";
     if (m.includes("email not confirmed") || m.includes("confirm")) return "Setup problem: in Supabase, turn off 'Confirm email' (Authentication, Sign In / Providers, Email).";
     if (m.includes("signups not allowed") || m.includes("signup is disabled")) return "New accounts are switched off in Supabase.";
+    if (m.includes("row-level security")) return "Only admins can do that.";
     if (m.includes("password")) return "Pick a longer password: at least 6 characters.";
     if (m.includes("too many runs")) return "That time was already sent a moment ago.";
     if (m.includes("rate limit") || status === 429) return "Too many tries. Wait a minute and try again.";
@@ -7095,7 +7163,7 @@ const online = {
   // ----- times -----
   async board() {
     return await this.req("/rest/v1/leaderboard?select=user_id,username,time_seconds,falls,created_at&map_id=eq." +
-      encodeURIComponent(ONLINE.MAP_ID) + "&order=time_seconds.asc,created_at.asc&limit=100") || [];
+      encodeURIComponent(this.boardId()) + "&order=time_seconds.asc,created_at.asc&limit=100") || [];
   },
   async submit(p) {
     const send = async tok => this.req("/rest/v1/runs", { method: "POST", token: tok, prefer: "return=minimal",
@@ -7113,14 +7181,14 @@ const online = {
     if (!this.forThisMap()) return;
     if (run.cpUses > 0) { this.lastResult = { kind: "info", text: "Runs that used checkpoints don't go on the leaderboard." }; return; }
     if (run.time < 60) return;
-    const p = { map_id: ONLINE.MAP_ID, time: run.time, falls: run.falls, at: Date.now() };
+    const p = { map_id: this.boardId(), time: run.time, falls: run.falls, at: Date.now() };
     writeJSON(ONLINE.PENDING_KEY, p);
     this.sendPending();
   },
   // Send a finished climb that is waiting (not logged in yet, or no internet)
   async sendPending() {
     const p = readJSON(ONLINE.PENDING_KEY);
-    if (!p || !this.forThisMap() || p.map_id !== ONLINE.MAP_ID) return;
+    if (!p || !this.forThisMap() || p.map_id !== this.boardId()) return;
     if (!this.session) { this.result("login", "Log in to put your time of " + fmtRace(p.time) + " on the leaderboard."); return; }
     this.result("info", "Sending your time...");
     try {
@@ -7137,8 +7205,70 @@ const online = {
     }
   },
   result(kind, text) { this.lastResult = { kind, text }; ui.showOnline(); },
+
+  // ----- the published main map -----
+  // On start: is there a newer main map than the one this device runs? Then keep
+  // it and reload, while you are still on the start screen.
+  async checkMap() {
+    if (!this.enabled() || CUSTOM) return;
+    let rows;
+    try { rows = await this.req("/rest/v1/maps?id=eq.main&select=version,board"); } catch (err) { return; }   // offline: play what we have
+    if (!Array.isArray(rows)) return;
+    const row = rows[0], have = PUBLISHED ? PUBLISHED.version : 0;
+    if (!row) {   // nothing published (any more): back to the built-in map
+      if (PUBLISHED) { try { localStorage.removeItem(MAIN_CACHE_KEY); } catch (err) { /* ignore */ } this.reloadForMap(0); }
+      return;
+    }
+    if (row.version === have) return;
+    try {
+      const full = await this.req("/rest/v1/maps?id=eq.main&select=version,board,data");
+      const r = full && full[0];
+      if (!r || !normalizeMap(r.data)) return;
+      localStorage.setItem(MAIN_CACHE_KEY, JSON.stringify({ version: r.version, board: r.board, map: r.data }));
+      this.reloadForMap(r.version);
+    } catch (err) { /* storage full or offline: keep playing this one */ }
+  },
+  reloadForMap(version) {
+    let done = null;
+    try { done = sessionStorage.getItem("teacup-map-reloaded"); sessionStorage.setItem("teacup-map-reloaded", String(version)); } catch (err) { return; }
+    if (done === String(version)) return;   // never reload twice for the same map
+    if (app.state === "title" || app.state === "paused") { saveRun(); location.reload(); }
+    else ui.toast("The map was updated", "You get the new version the next time you open the game.", "tip", "New map");
+  },
+  // Admins can publish the main map. The database decides; this only asks.
+  async isAdmin() {
+    if (!this.session || !this.enabled()) return false;
+    if (this.adminFor === this.session.user_id) return this.admin;
+    try {
+      const rows = await this.req("/rest/v1/admins?select=user_id", { token: await this.token() });
+      this.admin = Array.isArray(rows) && rows.length > 0;
+      this.adminFor = this.session.user_id;
+    } catch (err) { this.admin = false; }
+    return this.admin;
+  },
+  async publishMap(map, newBoard) {
+    let board = "main-" + Date.now().toString(36);
+    if (!newBoard) {   // keep the leaderboard that is live now (this device may still run an older map)
+      const rows = await this.req("/rest/v1/maps?id=eq.main&select=board");
+      board = (Array.isArray(rows) && rows[0] && rows[0].board) || this.boardId();
+    }
+    const send = async tok => this.req("/rest/v1/maps?on_conflict=id", { method: "POST", token: tok,
+      prefer: "resolution=merge-duplicates,return=representation", body: { id: "main", data: map, board } });
+    let rows;
+    try { rows = await send(await this.token()); }
+    catch (err) {
+      if (err.status === 401) rows = await send(await this.token(true));
+      else if (err.status === 403) throw new Error("Only admins can publish the main map.");
+      else throw err;
+    }
+    const r = Array.isArray(rows) ? rows[0] : rows;
+    if (!r) throw new Error("Published, but no reply came back. Reload to check.");
+    try { localStorage.setItem(MAIN_CACHE_KEY, JSON.stringify({ version: r.version, board: r.board, map: r.data })); } catch (err) { /* reload fetches it */ }
+    return r;
+  },
 };
 online.init();
+if (!HEADLESS) setTimeout(() => online.checkMap(), 0);
 
 
 /* ==========================================================================
