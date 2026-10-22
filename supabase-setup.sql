@@ -117,3 +117,73 @@ create trigger maps_version before insert or update on public.maps for each row 
 insert into public.admins (user_id)
 select id from public.profiles where lower(username) = 'edmacs'
 on conflict do nothing;
+
+-- 9. Player levels: anyone logged in can upload maps from the map maker; everyone can play them.
+create table if not exists public.levels (
+  id bigint generated always as identity primary key,
+  user_id uuid not null default auth.uid() references public.profiles (id) on delete cascade,
+  title text not null check (char_length(btrim(title)) between 1 and 40),
+  data jsonb not null check (octet_length(data::text) < 1500000),
+  plays integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists levels_new on public.levels (created_at desc);
+alter table public.levels enable row level security;
+drop policy if exists "levels are public" on public.levels;
+create policy "levels are public" on public.levels for select to anon, authenticated using (true);
+drop policy if exists "upload your own levels" on public.levels;
+create policy "upload your own levels" on public.levels for insert to authenticated
+  with check (user_id = (select auth.uid()));
+drop policy if exists "update your own levels" on public.levels;
+create policy "update your own levels" on public.levels for update to authenticated
+  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
+-- you can delete your own levels; admins can delete any level (for anything mean or broken)
+drop policy if exists "delete your own levels" on public.levels;
+create policy "delete your own levels" on public.levels for delete to authenticated
+  using (user_id = (select auth.uid()) or exists (select 1 from public.admins a where a.user_id = (select auth.uid())));
+
+-- At most 30 levels per player, one upload every 15 seconds, and nobody can fake their play count
+create or replace function public.guard_levels() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  if current_setting('teacup.counting_play', true) = 'on' then return new; end if;   -- count_play below
+  if tg_op = 'INSERT' then
+    new.plays := 0; new.created_at := now();
+    if (select count(*) from public.levels l where l.user_id = new.user_id) >= 30 then
+      raise exception 'You have 30 levels already. Delete one first.';
+    end if;
+  else
+    new.plays := old.plays; new.user_id := old.user_id; new.created_at := old.created_at;
+  end if;
+  if exists (select 1 from public.levels l where l.user_id = new.user_id and l.updated_at > now() - interval '15 seconds'
+             and (tg_op = 'INSERT' or l.id <> new.id)) then
+    raise exception 'Too fast. Wait a few seconds and try again.';
+  end if;
+  new.updated_at := now();
+  return new;
+end; $$;
+drop trigger if exists levels_guard on public.levels;
+create trigger levels_guard before insert or update on public.levels for each row execute function public.guard_levels();
+
+-- Counting a play: the only way to change "plays", one at a time
+create or replace function public.count_play(level_id bigint) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  perform set_config('teacup.counting_play', 'on', true);   -- lets this one update past the guard
+  update public.levels set plays = plays + 1 where id = level_id;
+  perform set_config('teacup.counting_play', 'off', true);
+end; $$;
+revoke all on function public.count_play(bigint) from public;
+grant execute on function public.count_play(bigint) to anon, authenticated;
+
+-- The list players browse: no map data, plus the maker's name
+create or replace view public.level_list with (security_invoker = true) as
+select l.id, l.title, l.user_id, p.username, l.plays, l.created_at, l.updated_at
+from public.levels l join public.profiles p on p.id = l.user_id;
+grant select on public.level_list to anon, authenticated;
+
+-- Times on player levels go on that level's own board (map_id "lvl-<id>"); short levels are fine there
+alter table public.runs drop constraint if exists runs_time_seconds_check;
+alter table public.runs add constraint runs_time_seconds_check
+  check (time_seconds < 360000 and time_seconds >= case when map_id like 'lvl-%' then 3 else 60 end);

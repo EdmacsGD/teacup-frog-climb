@@ -317,6 +317,13 @@
   .acc-msg.ok { color: var(--sage-dark); }
   .v-online { margin: 10px 0 0; font-weight: 800; font-size: 14px; text-align: center; }
   .v-online.ok { color: var(--sage-dark); } .v-online.error { color: #b33a2a; }
+  .lv-tabs { display: flex; gap: 6px; margin: 4px 0 8px; }
+  .lv-tabs button { font: inherit; font-weight: 800; font-size: 13px; padding: 6px 12px; border-radius: 999px; border: 2px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; }
+  .lv-tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .lv-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px; background: rgba(255,255,255,0.65); border: 2px solid var(--line); }
+  .lv-main { flex: 1; min-width: 0; } .lv-main b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lv-main small { color: var(--ink-soft); font-weight: 700; font-size: 12px; }
+  .lv-row .btn { width: auto; padding: 7px 14px; font-size: 14px; margin: 0; }
   .title-account { margin-top: 8px; text-align: center; font-size: 13px; font-weight: 800; }
   .title-account button { font: inherit; border: none; background: none; color: var(--accent); cursor: pointer; text-decoration: underline; padding: 0 4px; }
 </style>
@@ -330,7 +337,7 @@
     <div class="hud-height"><span id="hud-h">0.0</span><small>m</small></div>
     <div class="hud-sub"><span>Best <b id="hud-best">0.0</b> m</span><span class="dot"></span><span id="hud-zone">Garden</span></div>
     <div class="hud-chips">
-      <span class="chip" id="chip-mode" title="Physics mode">Remake</span>
+      <span class="chip" id="chip-mode" title="Physics mode" hidden>Remake</span>
       <span class="chip" id="chip-tool" title="Tool">Pickaxe</span>
       <span class="chip" id="chip-sugar" title="Sugar cubes found"><svg viewBox="0 0 24 24"><path d="M12 2 21 7v10l-9 5-9-5V7z" fill="#fff" stroke="#3b2a20" stroke-width="2" stroke-linejoin="round"/><path d="M3 7l9 5 9-5M12 12v10" fill="none" stroke="#3b2a20" stroke-width="2" stroke-linejoin="round"/></svg><b id="hud-sugar">0</b>/<span id="hud-sugar-total">0</span></span>
       <span class="chip" id="chip-time" title="Climb time" hidden>0:00</span>
@@ -378,6 +385,7 @@
         <button class="btn" id="t-settings">Settings</button>
         <button class="btn" id="t-ach">Achievements</button>
         <button class="btn" id="t-board" hidden>Leaderboard</button>
+        <button class="btn" id="t-levels" hidden>Player levels</button>
         <button class="btn" id="t-maker">Map maker</button>
         <button class="btn" id="t-main" hidden>Back to the main game</button>
       </div>
@@ -498,7 +506,7 @@
 <!-- Leaderboard -->
 <div class="overlay" id="scr-board">
   <div class="panel">
-    <div class="ach-head"><h2>Leaderboard</h2><span class="ach-count" id="board-who"></span></div>
+    <div class="ach-head"><h2 id="board-title">Leaderboard</h2><span class="ach-count" id="board-who"></span></div>
     <p class="lead">Fastest climbs to the sun, one best time per player. Runs that used checkpoints don't count.</p>
     <div class="board-list" id="board-list"></div>
     <div class="btn-row">
@@ -506,6 +514,17 @@
       <button class="btn" id="board-account">Log in</button>
       <button class="btn primary" data-back>Back</button>
     </div>
+  </div>
+</div>
+
+<!-- Player levels -->
+<div class="overlay" id="scr-levels">
+  <div class="panel">
+    <h2>Player levels</h2>
+    <p class="lead">Levels other players made in the Map maker. Every one was finished by its maker before uploading.</p>
+    <div class="lv-tabs" id="lv-tabs"><button data-sort="new">Newest</button><button data-sort="plays">Most played</button><button data-sort="mine">Mine</button></div>
+    <div class="board-list" id="lv-list"></div>
+    <div class="btn-row"><button class="btn primary" data-back>Back</button></div>
   </div>
 </div>
 
@@ -555,6 +574,7 @@
     <button class="ed-btn" id="ed-check">Check</button>
     <button class="ed-btn" id="ed-export">Export</button>
     <button class="ed-btn dev" id="ed-publish" hidden>Publish</button>
+    <button class="ed-btn" id="ed-upload" hidden>Upload</button>
     <button class="ed-btn primary" id="ed-play">Play</button>
     <button class="ed-btn" id="ed-close">Close</button>
   </div>
@@ -1292,8 +1312,14 @@ function normalizeMap(m) {
 }
 const BOOT = readBoot();
 const CUSTOM = BOOT && BOOT.mode === "play" && typeof BOOT.id === "string" ? readStoredMap(BOOT.id) : null;
+// A short fingerprint of a map's saved text, to tell if it changed since you last finished it
+function mapHash(str) { let h = 5381; for (let i = 0; i < (str || "").length; i++) h = (h * 33 + str.charCodeAt(i)) | 0; return String(h >>> 0); }
 if (CUSTOM) {
   CUSTOM.id = BOOT.id;
+  try { CUSTOM.hash = mapHash(localStorage.getItem(MAP_PREFIX + BOOT.id)); } catch (err) { CUSTOM.hash = ""; }
+  // a player level from the internet (section 18c): its number, title and maker
+  CUSTOM.remote = Number.isInteger(BOOT.remote) ? BOOT.remote : null;
+  if (CUSTOM.remote) { CUSTOM.name = String(BOOT.title || "Player level").slice(0, 40); CUSTOM.author = String(BOOT.author || "").slice(0, 16); }
   // a custom map gets its own save slot and progress, so it never touches the main climb
   CONFIG.SAVE_KEY += "-custom-" + BOOT.id;
   CONFIG.PROGRESS_KEY += "-custom-" + BOOT.id;
@@ -2070,7 +2096,7 @@ function sanitizeSettings() {
   settings.master = clamp(settings.master, 0, 1);
   settings.music = clamp(settings.music, 0, 1);
   settings.sfx = clamp(settings.sfx, 0, 1);
-  if (settings.physics !== "remake" && settings.physics !== "motors") settings.physics = "remake";
+  settings.physics = "remake";   // fixed: the leaderboards only stay fair if everyone climbs with the same physics
   if (!TOOLS[settings.tool]) settings.tool = "pickaxe";
   settings.theme = clamp(Math.round(settings.theme), 0, THEMES.length - 1);
   settings.particles = clamp(Math.round(settings.particles), 0, 2);
@@ -5652,8 +5678,6 @@ const SETTING_ROWS = [
   { key: "musicOn", label: "Background music", type: "toggle" },
   { key: "muted", label: "Mute everything", hint: "M key", type: "toggle" },
   { h: "Climbing" },
-  { key: "physics", label: "Physics", type: "choice", options: [["remake", "Remake"], ["motors", "Motors"]],
-    hint: "Remake: a gentle spring that cannot throw you. Motors: Foddy style, much stronger pogo." },
   { key: "tool", label: "Tool", hint: "H key", type: "choice", options: [["pickaxe", "Pickaxe"], ["hammer", "Hammer"]] },
   { key: "checkpoints", label: "Checkpoints", type: "toggle", hint: "Optional lamps you can return to with K. Off is the original challenge." },
   { key: "showBest", label: "Best-height line", type: "toggle", hint: "A dashed line where your best height is." },
@@ -5697,7 +5721,8 @@ const ui = {
     for (const id of ["hud", "hud-h", "hud-best", "hud-zone", "chip-mode", "chip-tool", "hud-sugar", "hud-sugar-total", "chip-time", "chip-cp",
       "btn-sound", "btn-full", "btn-pause", "btn-map", "scr-map", "map-scroll", "map-canvas", "map-info", "prog-fill", "prog-ticks", "prog-best", "prog-you", "banner", "banner-title", "banner-sub",
       "message", "msg-title", "msg-sub", "toasts", "touch-hint", "scr-title", "scr-pause", "scr-settings", "scr-controls", "scr-ach",
-      "scr-victory", "scr-confirm", "t-continue", "t-continue-sub", "t-new", "t-settings", "t-controls", "t-ach", "t-stats", "t-hint", "t-maker", "t-main", "p-editor", "t-board", "t-account", "v-online", "v-login",
+      "scr-victory", "scr-confirm", "t-continue", "t-continue-sub", "t-new", "t-settings", "t-controls", "t-ach", "t-stats", "t-hint", "t-maker", "t-main", "p-editor", "t-board", "t-account", "v-online", "v-login", "t-levels",
+      "scr-levels", "lv-list", "lv-tabs", "board-title",
       "scr-board", "board-who", "board-list", "board-refresh", "board-account", "scr-account", "acc-title", "acc-form", "acc-lead", "acc-name",
       "acc-pass", "acc-msg", "acc-switch", "acc-go", "acc-in", "acc-me", "acc-out",
       "p-resume", "p-checkpoint", "p-settings", "p-controls", "p-ach", "p-restart", "p-quit", "pause-lead", "settings-body",
@@ -5707,7 +5732,7 @@ const ui = {
     const E = this.els;
     const on = (id, fn) => E[id].addEventListener("click", e => { audio.unlock(); sfx.ui(); fn(e); });
     on("t-continue", () => app.play());
-    on("t-new", () => this.newClimb());
+    on("t-new", () => { if (CUSTOM && CUSTOM.remote && !this.playCounted) { this.playCounted = true; online.countPlay(CUSTOM.remote); } this.newClimb(); });
     on("t-settings", () => this.open("scr-settings"));
     on("t-controls", () => this.open("scr-controls"));
     on("t-ach", () => this.open("scr-ach"));
@@ -5715,6 +5740,9 @@ const ui = {
     on("p-editor", () => { saveRun(); editor.open(CUSTOM.id); });
     on("t-main", () => leaveCustomMap());
     on("t-board", () => this.openBoard());
+    on("t-levels", () => this.openLevels());
+    E["lv-tabs"].addEventListener("click", e => { const b = e.target.closest("[data-sort]"); if (b) { sfx.ui(); this.lvSort = b.dataset.sort; this.loadLevels(); } });
+    E["lv-list"].addEventListener("click", e => this.levelClick(e));
     on("board-refresh", () => this.loadBoard());
     on("board-account", () => this.openAccount());
     on("v-login", () => this.openAccount());
@@ -5913,9 +5941,15 @@ const ui = {
     E["t-new"].textContent = CUSTOM ? (saved ? "Restart your map" : "Play your map") : saved ? "New climb" : "Start climbing";
     E["t-main"].hidden = !CUSTOM; E["t-ach"].hidden = !!CUSTOM;
     E["t-board"].hidden = !online.forThisMap();
+    E["t-levels"].hidden = !online.enabled() || !!CUSTOM;
+    E["t-maker"].hidden = !!(CUSTOM && CUSTOM.remote);
+    if (CUSTOM && CUSTOM.remote) {
+      E["t-new"].textContent = saved ? "Restart this level" : "Play this level";
+      document.querySelector("#scr-title .tagline").textContent = "Player level: " + CUSTOM.name + (CUSTOM.author ? " by " + CUSTOM.author : "");
+    }
     E["t-account"].hidden = !online.forThisMap();
     E["t-account"].innerHTML = online.name() ? "Logged in as " + esc(online.name()) + "<button>Account</button>" : "Not logged in.<button>Log in</button>for the leaderboard";
-    if (CUSTOM) document.querySelector("#scr-title .tagline").textContent = "Your map: " + (CUSTOM.name || "Untitled");
+    if (CUSTOM && !CUSTOM.remote) document.querySelector("#scr-title .tagline").textContent = "Your map: " + (CUSTOM.name || "Untitled");
     E["t-new"].classList.toggle("primary", !saved);
     if (saved) {
       const zn = ZONES[game.zoneAt(-cup.y)].name;
@@ -5932,14 +5966,14 @@ const ui = {
   refreshPause() {
     const E = this.els, cpOk = settings.checkpoints && run.cp >= 0;
     E["p-checkpoint"].hidden = !cpOk;
-    E["p-editor"].hidden = !CUSTOM;
+    E["p-editor"].hidden = !CUSTOM || !!CUSTOM.remote;
     E["p-quit"].textContent = CUSTOM ? "Back to the main game" : "Back to start screen";
     if (cpOk) E["p-checkpoint"].textContent = "Return to checkpoint (" + checkpointName(CHECKPOINTS[run.cp]).replace(/^The /, "") + ")";
     E["pause-lead"].textContent = "Climbing for " + fmtTime(run.time) + ". " + ["Take a breath. The tea stays warm.", "Shake out your paws.", "The ledge will wait for you."][Math.floor(run.time / 60) % 3];
   },
   showVictory() {
     const E = this.els;
-    E["v-sub"].textContent = CUSTOM ? "You finished " + (CUSTOM.name || "your map") + ": " + SUMMIT_HEIGHT_M.toFixed(0) + " m."
+    E["v-sub"].textContent = CUSTOM ? "You finished " + (CUSTOM.name || "your map") + (CUSTOM.author ? " by " + CUSTOM.author : "") + ": " + SUMMIT_HEIGHT_M.toFixed(0) + " m."
       : "You climbed " + SUMMIT_HEIGHT_M.toFixed(0) + " m from the junkyard to the sun.";
     document.querySelector("#scr-victory .v-title").textContent = CUSTOM ? "You made it" : "Tea on the Sun";
     const tools = Object.keys(run.tools).map(t => TOOLS[t] ? TOOLS[t].name : t).join(" + ");
@@ -5961,7 +5995,43 @@ const ui = {
     E["v-login"].hidden = !(r && r.kind === "login");
     if (r) { E["v-online"].textContent = r.text; E["v-online"].className = "v-online " + r.kind; }
   },
-  openBoard() { this.open("scr-board"); this.loadBoard(); },
+  openBoard() {
+    this.els["board-title"].textContent = CUSTOM && CUSTOM.remote ? "Fastest on " + CUSTOM.name : "Leaderboard";
+    this.open("scr-board"); this.loadBoard();
+  },
+  // ----- player levels -----
+  openLevels() { this.lvSort = this.lvSort || "new"; this.open("scr-levels"); this.loadLevels(); },
+  async loadLevels() {
+    const E = this.els, list = E["lv-list"];
+    for (const b of E["lv-tabs"].querySelectorAll("[data-sort]")) b.classList.toggle("on", b.dataset.sort === this.lvSort);
+    if (this.lvSort === "mine" && !online.name()) { list.innerHTML = '<div class="board-empty">Log in to see the levels you uploaded.</div>'; return; }
+    list.innerHTML = '<div class="board-empty">Loading...</div>';
+    try {
+      const [rows, admin] = await Promise.all([online.listLevels(this.lvSort === "plays" ? "plays" : "new", this.lvSort === "mine"), online.isAdmin()]);
+      const me = online.session && online.session.user_id;
+      this.lvRows = rows;
+      if (!rows.length) { list.innerHTML = '<div class="board-empty">' + (this.lvSort === "mine" ? "You have not uploaded a level yet. Make one in the Map maker, finish it once, then press Upload." : "No levels yet. Make one in the Map maker and upload it.") + "</div>"; return; }
+      list.innerHTML = rows.map((r, i) => `<div class="lv-row"><div class="lv-main"><b>${esc(r.title)}</b><small>by ${esc(r.username)}, ${r.plays} ${r.plays === 1 ? "play" : "plays"}, ${esc(new Date(r.created_at).toLocaleDateString())}</small></div>
+        ${r.user_id === me || admin ? `<button class="btn lv-del" data-del="${i}">Delete</button>` : ""}<button class="btn primary lv-play" data-play="${i}">Play</button></div>`).join("");
+    } catch (err) { list.innerHTML = `<div class="board-empty">${esc(err.message)}</div>`; }
+  },
+  async levelClick(e) {
+    const p = e.target.closest("[data-play]"), d = e.target.closest("[data-del]");
+    if (!p && !d) return;
+    sfx.ui();
+    const r = this.lvRows[+(p || d).dataset[p ? "play" : "del"]];
+    if (p) {
+      p.textContent = "Loading..."; p.disabled = true;
+      try { await online.playLevel(r.id, r.title, r.username); }
+      catch (err) { p.textContent = "Play"; p.disabled = false; this.toast("Could not open the level", err.message, "tip", "Levels"); }
+      return;
+    }
+    const mine = online.session && r.user_id === online.session.user_id;
+    this.confirm("Delete \"" + r.title + "\"?", (mine ? "Your level" : "This level by " + r.username) + " is removed for everyone. Its times go with it. This cannot be undone.", "Delete", async () => {
+      try { await online.deleteLevel(r.id); this.toast("Deleted", r.title, "tip", "Levels"); } catch (err) { this.toast("Could not delete it", err.message, "tip", "Levels"); }
+      this.openLevels();
+    });
+  },
   async loadBoard() {
     const E = this.els, list = E["board-list"];
     E["board-who"].textContent = online.name() ? "You: " + online.name() : "";
@@ -6258,8 +6328,8 @@ const editor = {
     this.dirty = false;
     try {
       localStorage.setItem(MAP_PREFIX + this.id, JSON.stringify(this.map));
-      const l = this.list().filter(e => e.id !== this.id);
-      l.unshift({ id: this.id, name: this.map.name, t: Date.now() });
+      const old = this.list(), was = old.find(e => e.id === this.id), l = old.filter(e => e.id !== this.id);
+      l.unshift({ id: this.id, name: this.map.name, t: Date.now(), remote: was && was.remote });   // remote: its number online, once uploaded
       this.writeList(l);
       this.setSaved("Saved");
       return true;
@@ -6653,8 +6723,56 @@ const editor = {
   async refreshTop() {
     const pub = this.els.root && document.getElementById("ed-publish");
     if (!pub) return;
+    document.getElementById("ed-upload").hidden = !online.enabled() || this.id === "main-edit";
     pub.hidden = !(this.id === "main-edit" && await online.isAdmin());
   },
+  // Upload this map as a player level. You must have reached its flag (with the
+  // map exactly as it is now) first: that way every uploaded level can be finished.
+  async upload() {
+    const D = this.els.dialog;
+    if (!online.name()) { this.toast("Log in first: Close the map maker and use Log in on the start screen."); return; }
+    const probs = this.check().filter(p => /start|flag/.test(p));
+    if (probs.length) { this.toast(probs[0]); return; }
+    this.saveNow(true);
+    let raw = null; try { raw = localStorage.getItem(MAP_PREFIX + this.id); } catch (err) { /* ignore */ }
+    let beaten = null; try { beaten = localStorage.getItem("teacup-beaten-" + this.id); } catch (err) { /* ignore */ }
+    const entry = this.list().find(e => e.id === this.id) || {};
+    if (!raw || beaten !== mapHash(raw)) {
+      D.innerHTML = `<h2>Finish it first</h2><p class="ed-hint">Press Play and reach your flag once, with the map exactly as it is now. That proves the level can be finished, so nobody uploads a level that is impossible.${beaten ? " You changed the map since you last finished it." : ""}</p>
+        <div class="ed-btns"><button class="ed-btn primary" data-playnow>Play it now</button><button class="ed-btn" data-closem>Cancel</button></div>`;
+      D.querySelector("[data-playnow]").onclick = () => this.play();
+      D.querySelector("[data-closem]").onclick = () => this.closeModal();
+      this.els.modal.hidden = false;
+      return;
+    }
+    D.innerHTML = `<h2>${entry.remote ? "Update your level" : "Upload your level"}</h2>
+      <p class="ed-hint">${entry.remote ? "Players get the new version the next time they open it. Its leaderboard stays." : "Everyone can find and play it under Player levels. Keep the title friendly, and don't put your real name or other personal things in it."}</p>
+      <label class="ed-row"><span>Title</span><input data-title maxlength="40" style="width:200px" value="${esc(this.map.name || "")}"></label>
+      <p class="acc-msg" data-upmsg></p>
+      <div class="ed-btns"><button class="ed-btn primary" data-upgo>${entry.remote ? "Update" : "Upload"}</button>${entry.remote ? `<button class="ed-btn" data-upnew>Upload as a new level</button>` : ""}<button class="ed-btn" data-closem>Cancel</button></div>`;
+    D.querySelector("[data-closem]").onclick = () => this.closeModal();
+    const go = async asNew => {
+      const msg = D.querySelector("[data-upmsg]"), title = D.querySelector("[data-title]").value.trim();
+      if (!title) { msg.className = "acc-msg"; msg.textContent = "Give your level a title."; return; }
+      for (const b of D.querySelectorAll("button")) b.disabled = true;
+      msg.className = "acc-msg ok"; msg.textContent = "Uploading...";
+      try {
+        const data = JSON.parse(JSON.stringify(this.map)); data.name = title;
+        const id = await online.uploadLevel(title, data, asNew ? null : entry.remote);
+        const l = this.list(), e = l.find(x => x.id === this.id);
+        if (e) { e.remote = id; this.writeList(l); }
+        msg.textContent = (entry.remote && !asNew ? "Updated." : "Uploaded.") + " Everyone can play it under Player levels on the start screen.";
+        D.querySelector("[data-upgo]").hidden = true;
+        const nb = D.querySelector("[data-upnew]"); if (nb) nb.hidden = true;
+        D.querySelector("[data-closem]").textContent = "Done";
+      } catch (err) { msg.className = "acc-msg"; msg.textContent = err.message; }
+      for (const b of D.querySelectorAll("button")) b.disabled = false;
+    };
+    D.querySelector("[data-upgo]").onclick = () => go(false);
+    const nb = D.querySelector("[data-upnew]"); if (nb) nb.onclick = () => go(true);
+    this.els.modal.hidden = false;
+  },
+
   // Publish the main-map copy: every player gets it the next time they open the game
   async publish() {
     const probs = this.check();
@@ -6722,6 +6840,7 @@ const editor = {
     on("ed-play", () => this.play());
     on("ed-export", () => this.exportFile());
     on("ed-publish", () => this.publish());
+    on("ed-upload", () => this.upload());
     on("ed-close", () => this.close());
     E.name.addEventListener("input", () => { this.map.name = E.name.value.slice(0, 60); this.dirty = true; this.saveT = 0.8; });
     E.file.addEventListener("change", () => { if (E.file.files[0]) this.importFile(E.file.files[0]); E.file.value = ""; });
@@ -7068,8 +7187,12 @@ const online = {
 
   enabled() { return !!(ONLINE.SUPABASE_URL && ONLINE.SUPABASE_ANON_KEY); },
   // Which leaderboard counts: the published map says, else the built-in one
-  boardId() { return (PUBLISHED && PUBLISHED.board) || ONLINE.MAP_ID; },
-  forThisMap() { return this.enabled() && !CUSTOM; },   // custom maps have no leaderboard
+  boardId() {
+    if (CUSTOM && CUSTOM.remote) return "lvl-" + CUSTOM.remote;   // each player level has its own board
+    return (PUBLISHED && PUBLISHED.board) || ONLINE.MAP_ID;
+  },
+  // The main map and player levels have leaderboards; your own maps on this device don't
+  forThisMap() { return this.enabled() && (!CUSTOM || !!CUSTOM.remote); },
   name() { return this.session ? this.session.username : null; },
   init() {
     this.session = readJSON(ONLINE.SESSION_KEY);
@@ -7103,6 +7226,9 @@ const online = {
   explain(status, d) {
     const raw = d ? String(d.msg || d.message || d.error_description || d.error || "") : "";
     const m = raw.toLowerCase();
+    if (m.includes("30 levels") || m.includes("too fast")) return raw;   // our own rules, already in plain words
+    if (m.includes("levels_title_check")) return "Give your level a title.";
+    if (m.includes("levels_data_check")) return "That level is too big to upload.";
     if (m.includes("invalid login")) return "Wrong name or password.";
     if (m.includes("already registered") || m.includes("already exists")) return "That name is taken. Try another one.";
     if (m.includes("database error saving new user")) return "That name is taken. Try another one.";
@@ -7178,9 +7304,11 @@ const online = {
   // checkpoint skips the fall, which is the whole challenge.
   onVictory() {
     this.lastResult = null;
+    // finishing your own map once (unchanged since) is what lets you upload it
+    if (CUSTOM && !CUSTOM.remote) try { localStorage.setItem("teacup-beaten-" + CUSTOM.id, CUSTOM.hash); } catch (err) { /* ignore */ }
     if (!this.forThisMap()) return;
     if (run.cpUses > 0) { this.lastResult = { kind: "info", text: "Runs that used checkpoints don't go on the leaderboard." }; return; }
-    if (run.time < 60) return;
+    if (run.time < (CUSTOM ? 3 : 60)) return;
     const p = { map_id: this.boardId(), time: run.time, falls: run.falls, at: Date.now() };
     writeJSON(ONLINE.PENDING_KEY, p);
     this.sendPending();
@@ -7205,6 +7333,44 @@ const online = {
     }
   },
   result(kind, text) { this.lastResult = { kind, text }; ui.showOnline(); },
+
+  // ----- player levels -----
+  async listLevels(sort, mine) {
+    let q = "/rest/v1/level_list?select=id,title,user_id,username,plays,created_at,updated_at&limit=80&order=" +
+      (sort === "plays" ? "plays.desc,created_at.desc" : "created_at.desc");
+    if (mine && this.session) q += "&user_id=eq." + encodeURIComponent(this.session.user_id);
+    return await this.req(q) || [];
+  },
+  async uploadLevel(title, data, remoteId) {
+    const body = { title: title.trim().slice(0, 40), data };
+    const send = async tok => remoteId
+      ? this.req("/rest/v1/levels?id=eq." + remoteId, { method: "PATCH", token: tok, prefer: "return=representation", body })
+      : this.req("/rest/v1/levels", { method: "POST", token: tok, prefer: "return=representation", body });
+    let rows;
+    try { rows = await send(await this.token()); }
+    catch (err) { if (err.status === 401) rows = await send(await this.token(true)); else throw err; }
+    const r = Array.isArray(rows) ? rows[0] : rows;
+    if (!r) throw new Error(remoteId ? "That level is gone from the internet. Upload it as a new one." : "The upload did not come back. Try again.");
+    return r.id;
+  },
+  async deleteLevel(id) {
+    const rows = await this.req("/rest/v1/levels?id=eq." + id, { method: "DELETE", token: await this.token(), prefer: "return=representation" });
+    if (!Array.isArray(rows) || !rows.length) throw new Error("You can only delete your own levels.");
+  },
+  countPlay(id) { this.req("/rest/v1/rpc/count_play", { method: "POST", body: { level_id: id } }).catch(() => {}); },
+  // Download a level and reload the game with it
+  async playLevel(id, title, author) {
+    const rows = await this.req("/rest/v1/levels?id=eq." + id + "&select=id,title,data");
+    const r = rows && rows[0];
+    if (!r) throw new Error("That level was deleted.");
+    if (!normalizeMap(r.data)) throw new Error("That level is broken and cannot be played.");
+    try {
+      localStorage.setItem(MAP_PREFIX + "L" + id, JSON.stringify(r.data));
+      sessionStorage.setItem(BOOT_KEY, JSON.stringify({ mode: "play", id: "L" + id, remote: id, title: r.title, author }));
+      localStorage.removeItem(CONFIG.SAVE_KEY.replace(/-custom-.*$/, "") + "-custom-L" + id);   // start at the start
+    } catch (err) { throw new Error("This browser is out of storage space for levels."); }
+    location.reload();
+  },
 
   // ----- the published main map -----
   // On start: is there a newer main map than the one this device runs? Then keep
